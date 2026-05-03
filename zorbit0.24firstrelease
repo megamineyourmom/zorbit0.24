@@ -169,8 +169,8 @@ local function createSlider(parent, text, min, max, default, callback)
     end)
 end
 
--- ScreenGui Setup
-local sg = create("ScreenGui", {Name = "ZorbitLoaderUI", ResetOnSpawn = false, DisplayOrder = 100, Parent = pgui})
+-- ScreenGui Setup (IgnoreGuiInset fixed)
+local sg = create("ScreenGui", {Name = "ZorbitLoaderUI", ResetOnSpawn = false, DisplayOrder = 100, IgnoreGuiInset = true, Parent = pgui})
 
 -- App Loader (First screen)
 local loader = create("Frame", {Size = UDim2.new(0, 400, 0, 250), Position = UDim2.new(0.5, -200, 0.5, -125), BackgroundColor3 = BG_COLOR, BorderSizePixel = 0, Visible = true, Parent = sg})
@@ -272,7 +272,6 @@ verifyBtn.MouseButton1Click:Connect(function()
     if captchaInput.Text == captchaCode then 
         captcha.Visible = false 
         main.Visible = true 
-        -- Initialize modules after menu is built
         if Settings.UI.IsPremium then setupPremiumFeatures() end
         setupStandardFeatures()
     else 
@@ -295,12 +294,14 @@ function setupPremiumFeatures()
 
     local function getClosestPlayer()
         local target, dist = nil, Settings.Aimbot.FOV
+        local center = Camera.ViewportSize / 2
         for _, p in pairs(Players:GetPlayers()) do
             if p ~= player and p.Character and p.Character:FindFirstChild(Settings.Aimbot.TargetPart) then
                 if Settings.Visuals.TeamCheck and p.Team == player.Team then continue end
                 local pos, onScreen = Camera:WorldToViewportPoint(p.Character[Settings.Aimbot.TargetPart].Position)
-                if onScreen then
-                    local mag = (Vector2.new(pos.X, pos.Y) - Vector2.new(mouse.X, mouse.Y)).Magnitude
+                -- Added Z-check to ensure they aren't behind the camera
+                if onScreen and pos.Z > 0 then
+                    local mag = (Vector2.new(pos.X, pos.Y) - center).Magnitude
                     if mag < dist then
                         dist = mag
                         target = p
@@ -312,19 +313,23 @@ function setupPremiumFeatures()
     end
 
     RunService.RenderStepped:Connect(function()
-        fovCircle.Position = UDim2.new(0, mouse.X - (Settings.Aimbot.FOV), 0, mouse.Y - (Settings.Aimbot.FOV))
+        local center = Camera.ViewportSize / 2
+        fovCircle.Position = UDim2.new(0, center.X - Settings.Aimbot.FOV, 0, center.Y - Settings.Aimbot.FOV)
         fovCircle.Size = UDim2.new(0, Settings.Aimbot.FOV * 2, 0, Settings.Aimbot.FOV * 2)
         fovCircle.Visible = Settings.Aimbot.Enabled
         
         if Settings.Aimbot.Enabled then
             local target = getClosestPlayer()
             if target and UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2) then
-                local targetPos = Camera:WorldToViewportPoint(target.Character[Settings.Aimbot.TargetPart].Position)
-                local move = (Vector2.new(targetPos.X, targetPos.Y) - Vector2.new(mouse.X, mouse.Y)) / Settings.Aimbot.Smoothing
-                if mousemoverel then
-                    mousemoverel(move.X, move.Y)
-                else
-                    Camera.CFrame = CFrame.new(Camera.CFrame.Position, target.Character[Settings.Aimbot.TargetPart].Position)
+                local targetPart = target.Character[Settings.Aimbot.TargetPart]
+                local targetPos, onScreen = Camera:WorldToViewportPoint(targetPart.Position)
+                if onScreen then
+                    local move = (Vector2.new(targetPos.X, targetPos.Y) - center) / math.max(Settings.Aimbot.Smoothing, 1)
+                    if mousemoverel then
+                        mousemoverel(move.X, move.Y)
+                    else
+                        Camera.CFrame = CFrame.new(Camera.CFrame.Position, targetPart.Position)
+                    end
                 end
             end
         end
@@ -332,28 +337,38 @@ function setupPremiumFeatures()
 end
 
 function setupStandardFeatures()
-    -- Triggerbot
     createToggle(tabFrames["Triggerbot"].Frame, "Enabled", function(v) Settings.Triggerbot.Enabled = v end)
     createSlider(tabFrames["Triggerbot"].Frame, "Delay (ms)", 0, 500, 50, function(v) Settings.Triggerbot.Delay = v/1000 end)
 
     task.spawn(function()
         while task.wait() do
             if Settings.Triggerbot.Enabled then
-                local target = mouse.Target
-                if target and target.Parent and (target.Parent:FindFirstChild("Humanoid") or target.Parent.Parent:FindFirstChild("Humanoid")) then
-                    local character = target.Parent:FindFirstChild("Humanoid") and target.Parent or target.Parent.Parent
-                    local p = Players:GetPlayerFromCharacter(character)
-                    if p and (not Settings.Visuals.TeamCheck or p.Team ~= player.Team) then
-                        task.wait(Settings.Triggerbot.Delay)
-                        if mouse1click then mouse1click() 
-                        elseif keypress then mouse1press() task.wait(0.01) mouse1release() end
+                local rayParams = RaycastParams.new()
+                rayParams.FilterType = Enum.RaycastFilterType.Exclude
+                -- Improved filter: ignore character AND any local viewmodels in camera
+                local filter = {player.Character, Camera}
+                rayParams.FilterDescendantsInstances = filter
+                
+                local rayOrigin = Camera.CFrame.Position
+                local rayDirection = Camera.CFrame.LookVector * Settings.Triggerbot.Range
+                local result = workspace:Raycast(rayOrigin, rayDirection, rayParams)
+                
+                if result and result.Instance then
+                    local hit = result.Instance
+                    local character = hit:FindFirstAncestorOfClass("Model")
+                    if character and character:FindFirstChild("Humanoid") then
+                        local p = Players:GetPlayerFromCharacter(character)
+                        if p and (not Settings.Visuals.TeamCheck or p.Team ~= player.Team) then
+                            task.wait(Settings.Triggerbot.Delay)
+                            if mouse1click then mouse1click() 
+                            elseif keypress then mouse1press() task.wait(0.01) mouse1release() end
+                        end
                     end
                 end
             end
         end
     end)
 
-    -- Visuals
     createToggle(tabFrames["Visuals"].Frame, "Box ESP", function(v) Settings.Visuals.BoxEsp = v end)
     createToggle(tabFrames["Visuals"].Frame, "Tracers (ESP Lines)", function(v) Settings.Visuals.Tracers = v end)
     createToggle(tabFrames["Visuals"].Frame, "Team Check", function(v) Settings.Visuals.TeamCheck = v end)
@@ -370,6 +385,7 @@ function setupStandardFeatures()
                         local h = espObjects[p] and espObjects[p].Highlight or create("Highlight", {Parent = char, Name = "ZorbitESP"})
                         h.Adornee = char
                         h.FillColor = p.TeamColor.Color
+                        h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
                         h.Enabled = true
                         if not espObjects[p] then espObjects[p] = {Highlight = h} else espObjects[p].Highlight = h end
                     elseif espObjects[p] and espObjects[p].Highlight then
@@ -378,12 +394,15 @@ function setupStandardFeatures()
 
                     if Settings.Visuals.Tracers and not isTeammate then
                         local pos, onScreen = Camera:WorldToViewportPoint(char.HumanoidRootPart.Position)
-                        if onScreen then
-                            local tracer = espObjects[p] and espObjects[p].Tracer or create("Frame", {Parent = sg, BackgroundColor3 = p.TeamColor.Color, BorderSizePixel = 0, AnchorPoint = Vector2.new(0.5, 0.5)})
-                            local dist = (Vector2.new(pos.X, pos.Y) - Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y)).Magnitude
+                        if onScreen and pos.Z > 0 then
+                            local tracer = espObjects[p] and espObjects[p].Tracer or create("Frame", {Parent = sg, BackgroundColor3 = p.TeamColor.Color, BorderSizePixel = 0, AnchorPoint = Vector2.new(0.5, 0)})
+                            local screenCenter = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y)
+                            local targetPos = Vector2.new(pos.X, pos.Y)
+                            local dist = (targetPos - screenCenter).Magnitude
+                            
                             tracer.Size = UDim2.new(0, 2, 0, dist)
-                            tracer.Position = UDim2.new(0, (pos.X + Camera.ViewportSize.X/2)/2, 0, (pos.Y + Camera.ViewportSize.Y)/2)
-                            tracer.Rotation = math.deg(math.atan2(pos.Y - Camera.ViewportSize.Y, pos.X - Camera.ViewportSize.X/2)) + 90
+                            tracer.Position = UDim2.new(0, screenCenter.X, 0, screenCenter.Y)
+                            tracer.Rotation = math.deg(math.atan2(targetPos.Y - screenCenter.Y, targetPos.X - screenCenter.X)) - 90
                             tracer.Visible = true
                             if not espObjects[p] then espObjects[p] = {Tracer = tracer} else espObjects[p].Tracer = tracer end
                         elseif espObjects[p] and espObjects[p].Tracer then
@@ -397,12 +416,10 @@ function setupStandardFeatures()
         end
     end)
 
-    -- Misc
     createToggle(tabFrames["Misc"].Frame, "NoClip", function(v) Settings.Misc.NoClip = v end)
     createToggle(tabFrames["Misc"].Frame, "Infinite Jump", function(v) Settings.Misc.InfiniteJump = v end)
     createSlider(tabFrames["Misc"].Frame, "WalkSpeed", 16, 200, 16, function(v) Settings.Misc.WalkSpeed = v end)
 
-    -- Settings Tab
     local function addSettingBtn(text, callback)
         local btn = create("TextButton", {Size = UDim2.new(1, -20, 0, 30), BackgroundColor3 = Color3.fromRGB(30, 30, 30), Text = text, TextColor3 = Settings.UI.IsPremium and GOLD_COLOR or ACCENT_COLOR, Font = THIN_FONT, TextSize = 16, Parent = tabFrames["Settings"].Frame})
         btn.MouseButton1Click:Connect(callback)
@@ -442,7 +459,6 @@ function setupStandardFeatures()
     addSettingBtn("Rain: Purple", function() Settings.UI.RainColor = Color3.fromRGB(180, 0, 255) end)
 end
 
--- Shared Logic
 RunService.Stepped:Connect(function()
     if player.Character and player.Character:FindFirstChild("Humanoid") then
         player.Character.Humanoid.WalkSpeed = Settings.Misc.WalkSpeed
