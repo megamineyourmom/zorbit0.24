@@ -1,0 +1,506 @@
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local Camera = workspace.CurrentCamera
+
+local player = Players.LocalPlayer
+local mouse = player:GetMouse()
+local pgui = player:WaitForChild("PlayerGui")
+
+-- Configuration & State
+local MENU_TITLE = "zorbit - legit"
+local ACCENT_COLOR = Color3.fromRGB(255, 255, 255)
+local GOLD_COLOR = Color3.fromRGB(255, 215, 0)
+local BG_COLOR = Color3.fromRGB(10, 10, 10)
+local THIN_FONT = Enum.Font.SourceSansLight
+local RAIN_TRANSPARENCY = 0.4
+local CAPTCHA_LENGTH = 14
+
+local PREMIUM_CODES = {
+    "wpe0origtj", "pasgertojnh", "psadogftrin", "sadporift", "pfeioj", 
+    "mpowviusm", "apwsdosdf", "nvmcijdj", "mvmpsdof", "aoiudhapusdhc"
+}
+
+local Settings = {
+    Triggerbot = {Enabled = false, Delay = 0.05, Range = 1000},
+    Visuals = {BoxEsp = false, Tracers = false, TeamCheck = true, FillTrans = 0.5},
+    Aimbot = {Enabled = false, Smoothing = 5, FOV = 100, TargetPart = "Head", Mode = "Legit"},
+    Misc = {WalkSpeed = 16, JumpPower = 50, NoClip = false, InfiniteJump = false},
+    UI = {RainColor = Color3.fromRGB(255, 255, 255), Theme = "Default", IsPremium = false}
+}
+
+-- Utility: Quick Instance Creator
+local function create(class, props)
+    local inst = Instance.new(class)
+    for k, v in pairs(props) do inst[k] = v end
+    return inst
+end
+
+-- Background Rain Animation Logic
+local function initRain(parentFrame)
+    local rainContainer = create("Frame", {
+        Size = UDim2.new(1, 0, 1, 0),
+        BackgroundTransparency = 1,
+        ClipsDescendants = true,
+        ZIndex = 0,
+        Parent = parentFrame
+    })
+
+    task.spawn(function()
+        while task.wait(0.04) do
+            if not parentFrame or not parentFrame.Parent then break end
+            if not parentFrame.Visible then continue end
+            
+            local bit = create("Frame", {
+                Size = UDim2.new(0, 1, 0, math.random(10, 20)),
+                Position = UDim2.new(math.random(), 0, -0.1, 0),
+                BackgroundColor3 = Settings.UI.RainColor,
+                BackgroundTransparency = RAIN_TRANSPARENCY,
+                BorderSizePixel = 0,
+                ZIndex = 1,
+                Parent = rainContainer
+            })
+            
+            local fallSpeed = math.random(400, 600)
+            local connection
+            connection = RunService.RenderStepped:Connect(function(dt)
+                if not bit or not bit.Parent then 
+                    connection:Disconnect() 
+                    return 
+                end
+                bit.BackgroundColor3 = Settings.UI.RainColor
+                bit.Position = bit.Position + UDim2.new(0, 0, 0, fallSpeed * dt)
+                if bit.Position.Y.Offset > parentFrame.AbsoluteSize.Y + 50 then
+                    connection:Disconnect()
+                    bit:Destroy()
+                end
+            end)
+        end
+    end)
+end
+
+-- UI Component Helpers
+local function createToggle(parent, text, callback)
+    local bg = create("Frame", {
+        Size = UDim2.new(1, -20, 0, 30),
+        BackgroundColor3 = Color3.fromRGB(25, 25, 25),
+        BorderSizePixel = 0,
+        Parent = parent
+    })
+    create("TextLabel", {
+        Size = UDim2.new(0.7, 0, 1, 0),
+        Position = UDim2.new(0.05, 0, 0, 0),
+        BackgroundTransparency = 1,
+        Text = text,
+        TextColor3 = Color3.fromRGB(200, 200, 200),
+        Font = THIN_FONT,
+        TextSize = 16,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        Parent = bg
+    })
+    local btn = create("TextButton", {
+        Size = UDim2.new(0, 50, 0, 20),
+        Position = UDim2.new(0.95, -50, 0.5, -10),
+        BackgroundColor3 = Color3.fromRGB(40, 40, 40),
+        Text = "OFF",
+        TextColor3 = Color3.fromRGB(255, 100, 100),
+        Font = THIN_FONT,
+        TextSize = 14,
+        BorderSizePixel = 0,
+        Parent = bg
+    })
+    local state = false
+    btn.MouseButton1Click:Connect(function()
+        state = not state
+        btn.Text = state and "ON" or "OFF"
+        btn.TextColor3 = state and Color3.fromRGB(100, 255, 100) or Color3.fromRGB(255, 100, 100)
+        callback(state)
+    end)
+    return bg
+end
+
+local function createSlider(parent, text, min, max, default, callback)
+    local bg = create("Frame", {
+        Size = UDim2.new(1, -20, 0, 45),
+        BackgroundTransparency = 1,
+        Parent = parent
+    })
+    local label = create("TextLabel", {
+        Size = UDim2.new(1, 0, 0, 20),
+        BackgroundTransparency = 1,
+        Text = text .. ": " .. default,
+        TextColor3 = Color3.fromRGB(180, 180, 180),
+        Font = THIN_FONT,
+        TextSize = 14,
+        Parent = bg
+    })
+    local sliderBg = create("Frame", {
+        Size = UDim2.new(1, 0, 0, 10),
+        Position = UDim2.new(0, 0, 0, 25),
+        BackgroundColor3 = Color3.fromRGB(30, 30, 30),
+        BorderSizePixel = 0,
+        Parent = bg
+    })
+    local fill = create("Frame", {
+        Size = UDim2.new((default - min) / (max - min), 0, 1, 0),
+        BackgroundColor3 = Settings.UI.IsPremium and GOLD_COLOR or ACCENT_COLOR,
+        BorderSizePixel = 0,
+        Parent = sliderBg
+    })
+    
+    local function update(input)
+        local pos = math.clamp((input.Position.X - sliderBg.AbsolutePosition.X) / sliderBg.AbsoluteSize.X, 0, 1)
+        local val = math.floor(min + (max - min) * pos)
+        fill.Size = UDim2.new(pos, 0, 1, 0)
+        label.Text = text .. ": " .. val
+        callback(val)
+    end
+
+    local dragging = false
+    sliderBg.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then dragging = true update(input) end
+    end)
+    UserInputService.InputChanged:Connect(function(input)
+        if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then update(input) end
+    end)
+    UserInputService.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
+    end)
+end
+
+-- ScreenGui Setup (IgnoreGuiInset fixed)
+local sg = create("ScreenGui", {Name = "ZorbitLoaderUI", ResetOnSpawn = false, DisplayOrder = 100, IgnoreGuiInset = true, Parent = pgui})
+
+-- App Loader (First screen)
+local loader = create("Frame", {Size = UDim2.new(0, 400, 0, 250), Position = UDim2.new(0.5, -200, 0.5, -125), BackgroundColor3 = BG_COLOR, BorderSizePixel = 0, Visible = true, Parent = sg})
+initRain(loader)
+
+local loaderTitle = create("TextLabel", {Size = UDim2.new(1, 0, 0, 50), BackgroundTransparency = 1, Text = "SELECT VERSION", TextColor3 = ACCENT_COLOR, Font = THIN_FONT, TextSize = 24, Parent = loader})
+local selectionLabel = create("TextLabel", {Size = UDim2.new(1, 0, 0, 30), Position = UDim2.new(0,0,0,50), BackgroundTransparency = 1, Text = "NORMAL", TextColor3 = Color3.fromRGB(200, 200, 200), Font = THIN_FONT, TextSize = 18, Parent = loader})
+
+local sliderTrack = create("Frame", {Size = UDim2.new(0.8, 0, 0, 40), Position = UDim2.new(0.1, 0, 0.45, 0), BackgroundColor3 = Color3.fromRGB(20, 20, 20), BorderSizePixel = 0, Parent = loader})
+local sliderKnob = create("Frame", {Size = UDim2.new(0.5, 0, 1, 0), Position = UDim2.new(0, 0, 0, 0), BackgroundColor3 = Color3.fromRGB(40, 40, 40), BorderSizePixel = 0, Parent = sliderTrack})
+local knobLabel = create("TextLabel", {Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, Text = "DRAG ME", TextColor3 = ACCENT_COLOR, Font = THIN_FONT, TextSize = 14, Parent = sliderKnob})
+
+local premiumCodeInput = create("TextBox", {Size = UDim2.new(0.8, 0, 0, 35), Position = UDim2.new(0.1, 0, 0.65, 0), BackgroundColor3 = Color3.fromRGB(20, 20, 20), BorderSizePixel = 0, Text = "", PlaceholderText = "Enter Premium Code...", TextColor3 = ACCENT_COLOR, Font = THIN_FONT, TextSize = 16, Visible = false, Parent = loader})
+local continueBtn = create("TextButton", {Size = UDim2.new(0.8, 0, 0, 40), Position = UDim2.new(0.1, 0, 0.8, 0), BackgroundColor3 = Color3.fromRGB(30, 30, 30), Text = "CONTINUE", TextColor3 = ACCENT_COLOR, Font = THIN_FONT, TextSize = 18, Parent = loader})
+
+-- Captcha Frame (Second screen)
+local captcha = create("Frame", {Size = UDim2.new(0, 350, 0, 220), Position = UDim2.new(0.5, -175, 0.5, -110), BackgroundColor3 = BG_COLOR, BorderSizePixel = 0, Visible = false, Parent = sg})
+initRain(captcha)
+
+-- Main Menu (Final screen)
+local main = create("Frame", {Size = UDim2.new(0, 550, 0, 400), Position = UDim2.new(0.5, -275, 0.5, -200), BackgroundColor3 = BG_COLOR, BorderSizePixel = 0, Visible = false, Parent = sg})
+initRain(main)
+
+-- Loader Logic
+local isPremiumChoice = false
+local function updateLoaderUI()
+    selectionLabel.Text = isPremiumChoice and "PREMIUM" or "NORMAL"
+    selectionLabel.TextColor3 = isPremiumChoice and GOLD_COLOR or Color3.fromRGB(200, 200, 200)
+    premiumCodeInput.Visible = isPremiumChoice
+    TweenService:Create(sliderKnob, TweenInfo.new(0.2), {Position = isPremiumChoice and UDim2.new(0.5, 0, 0, 0) or UDim2.new(0, 0, 0, 0)}):Play()
+end
+
+sliderTrack.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        isPremiumChoice = not isPremiumChoice
+        updateLoaderUI()
+    end
+end)
+
+-- Captcha Setup
+local function generateCaptcha(len)
+    local chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz1234567890"
+    local str = ""
+    for i = 1, len do local r = math.random(1, #chars) str = str .. string.sub(chars, r, r) end
+    return str
+end
+
+local captchaCode = generateCaptcha(CAPTCHA_LENGTH)
+local captchaTitle = create("TextLabel", {Size = UDim2.new(1, 0, 0, 40), BackgroundTransparency = 1, Text = "Verification Required", TextColor3 = ACCENT_COLOR, Font = THIN_FONT, TextSize = 22, Parent = captcha})
+local captchaDisplay = create("TextLabel", {Size = UDim2.new(0.9, 0, 0, 50), Position = UDim2.new(0.05, 0, 0.25, 0), BackgroundTransparency = 1, Text = captchaCode, TextColor3 = ACCENT_COLOR, Font = THIN_FONT, TextSize = 20, TextWrapped = true, Parent = captcha})
+local captchaInput = create("TextBox", {Size = UDim2.new(0.8, 0, 0, 35), Position = UDim2.new(0.1, 0, 0.55, 0), BackgroundColor3 = Color3.fromRGB(20, 20, 20), BorderSizePixel = 0, Text = "", PlaceholderText = "Enter long captcha...", TextColor3 = ACCENT_COLOR, Font = THIN_FONT, TextSize = 16, Parent = captcha})
+local verifyBtn = create("TextButton", {Size = UDim2.new(0.8, 0, 0, 35), Position = UDim2.new(0.1, 0, 0.78, 0), BackgroundColor3 = Color3.fromRGB(30, 30, 30), BorderSizePixel = 0, Text = "Unlock Zorbit", TextColor3 = ACCENT_COLOR, Font = THIN_FONT, TextSize = 18, Parent = captcha})
+
+local tabFrames = {}
+
+local function buildMenu()
+    local topBar = create("Frame", {Size = UDim2.new(1, 0, 0, 40), BackgroundTransparency = 1, Parent = main})
+    local displayTitle = Settings.UI.IsPremium and "zorbit - premium" or MENU_TITLE
+    local displayColor = Settings.UI.IsPremium and GOLD_COLOR or ACCENT_COLOR
+    
+    local titleLabel = create("TextLabel", {Size = UDim2.new(0, 200, 1, 0), Position = UDim2.new(0, 15, 0, 0), BackgroundTransparency = 1, Text = displayTitle, TextColor3 = displayColor, Font = THIN_FONT, TextSize = 22, TextXAlignment = Enum.TextXAlignment.Left, Parent = topBar})
+    local sidebar = create("Frame", {Size = UDim2.new(0, 140, 1, -40), Position = UDim2.new(0, 0, 0, 40), BackgroundTransparency = 1, Parent = main})
+    local container = create("Frame", {Size = UDim2.new(1, -150, 1, -50), Position = UDim2.new(0, 145, 0, 45), BackgroundTransparency = 1, Parent = main})
+
+    local tabs = {"Triggerbot", "Visuals", "Misc", "Settings"}
+    if Settings.UI.IsPremium then table.insert(tabs, 1, "Aimbot") end
+
+    for i, tabName in ipairs(tabs) do
+        local btn = create("TextButton", {Size = UDim2.new(1, -10, 0, 35), Position = UDim2.new(0, 5, 0, (i-1) * 40), BackgroundTransparency = 1, Text = tabName, TextColor3 = (i == 1) and displayColor or Color3.fromRGB(150, 150, 150), Font = THIN_FONT, TextSize = 18, Parent = sidebar})
+        local frame = create("ScrollingFrame", {Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, BorderSizePixel = 0, Visible = (i == 1), ScrollBarThickness = 1, CanvasSize = UDim2.new(0, 0, 0, 0), Parent = container})
+        local layout = create("UIListLayout", {Padding = UDim.new(0, 10), Parent = frame})
+        tabFrames[tabName] = {Button = btn, Frame = frame}
+        btn.MouseButton1Click:Connect(function()
+            for _, t in pairs(tabFrames) do t.Frame.Visible = false; t.Button.TextColor3 = Color3.fromRGB(150, 150, 150) end
+            frame.Visible = true; btn.TextColor3 = displayColor
+        end)
+    end
+end
+
+continueBtn.MouseButton1Click:Connect(function()
+    if isPremiumChoice then
+        local valid = false
+        for _, code in pairs(PREMIUM_CODES) do
+            if premiumCodeInput.Text == code then valid = true break end
+        end
+        if not valid then 
+            premiumCodeInput.Text = ""
+            premiumCodeInput.PlaceholderText = "INVALID CODE!"
+            return 
+        end
+        Settings.UI.IsPremium = true
+    end
+    buildMenu()
+    loader.Visible = false
+    captcha.Visible = true
+end)
+
+verifyBtn.MouseButton1Click:Connect(function()
+    if captchaInput.Text == captchaCode then 
+        captcha.Visible = false 
+        main.Visible = true 
+        if Settings.UI.IsPremium then setupPremiumFeatures() end
+        setupStandardFeatures()
+    else 
+        captchaCode = generateCaptcha(CAPTCHA_LENGTH)
+        captchaDisplay.Text = captchaCode
+        captchaInput.Text = "" 
+    end
+end)
+
+-- Feature Setup Functions
+function setupPremiumFeatures()
+    local aimFrame = tabFrames["Aimbot"].Frame
+    createToggle(aimFrame, "Enabled", function(v) Settings.Aimbot.Enabled = v end)
+    createSlider(aimFrame, "Sensitivity (Smoothing)", 1, 20, 5, function(v) Settings.Aimbot.Smoothing = v end)
+    createSlider(aimFrame, "FOV Radius", 10, 500, 100, function(v) Settings.Aimbot.FOV = v end)
+    
+    local fovCircle = create("Frame", {Size = UDim2.new(0, 200, 0, 200), BackgroundTransparency = 1, Parent = sg})
+    create("UICorner", {CornerRadius = UDim.new(1, 0), Parent = fovCircle})
+    local stroke = create("UIStroke", {Color = GOLD_COLOR, Thickness = 1, Transparency = 0.5, Parent = fovCircle})
+
+    local function getClosestPlayer()
+        local target, dist = nil, Settings.Aimbot.FOV
+        local center = Camera.ViewportSize / 2
+        for _, p in pairs(Players:GetPlayers()) do
+            if p ~= player and p.Character and p.Character:FindFirstChild(Settings.Aimbot.TargetPart) then
+                if Settings.Visuals.TeamCheck and p.Team == player.Team then continue end
+                local pos, onScreen = Camera:WorldToViewportPoint(p.Character[Settings.Aimbot.TargetPart].Position)
+                -- Added Z-check to ensure they aren't behind the camera
+                if onScreen and pos.Z > 0 then
+                    local mag = (Vector2.new(pos.X, pos.Y) - center).Magnitude
+                    if mag < dist then
+                        dist = mag
+                        target = p
+                    end
+                end
+            end
+        end
+        return target
+    end
+
+    RunService.RenderStepped:Connect(function()
+        local center = Camera.ViewportSize / 2
+        fovCircle.Position = UDim2.new(0, center.X - Settings.Aimbot.FOV, 0, center.Y - Settings.Aimbot.FOV)
+        fovCircle.Size = UDim2.new(0, Settings.Aimbot.FOV * 2, 0, Settings.Aimbot.FOV * 2)
+        fovCircle.Visible = Settings.Aimbot.Enabled
+        
+        if Settings.Aimbot.Enabled then
+            local target = getClosestPlayer()
+            if target and UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2) then
+                local targetPart = target.Character[Settings.Aimbot.TargetPart]
+                local targetPos, onScreen = Camera:WorldToViewportPoint(targetPart.Position)
+                if onScreen then
+                    local move = (Vector2.new(targetPos.X, targetPos.Y) - center) / math.max(Settings.Aimbot.Smoothing, 1)
+                    if mousemoverel then
+                        mousemoverel(move.X, move.Y)
+                    else
+                        Camera.CFrame = CFrame.new(Camera.CFrame.Position, targetPart.Position)
+                    end
+                end
+            end
+        end
+    end)
+end
+
+function setupStandardFeatures()
+    createToggle(tabFrames["Triggerbot"].Frame, "Enabled", function(v) Settings.Triggerbot.Enabled = v end)
+    createSlider(tabFrames["Triggerbot"].Frame, "Delay (ms)", 0, 500, 50, function(v) Settings.Triggerbot.Delay = v/1000 end)
+
+    task.spawn(function()
+        while task.wait() do
+            if Settings.Triggerbot.Enabled then
+                local rayParams = RaycastParams.new()
+                rayParams.FilterType = Enum.RaycastFilterType.Exclude
+                -- Improved filter: ignore character AND any local viewmodels in camera
+                local filter = {player.Character, Camera}
+                rayParams.FilterDescendantsInstances = filter
+                
+                local rayOrigin = Camera.CFrame.Position
+                local rayDirection = Camera.CFrame.LookVector * Settings.Triggerbot.Range
+                local result = workspace:Raycast(rayOrigin, rayDirection, rayParams)
+                
+                if result and result.Instance then
+                    local hit = result.Instance
+                    local character = hit:FindFirstAncestorOfClass("Model")
+                    if character and character:FindFirstChild("Humanoid") then
+                        local p = Players:GetPlayerFromCharacter(character)
+                        if p and (not Settings.Visuals.TeamCheck or p.Team ~= player.Team) then
+                            task.wait(Settings.Triggerbot.Delay)
+                            if mouse1click then mouse1click() 
+                            elseif keypress then mouse1press() task.wait(0.01) mouse1release() end
+                        end
+                    end
+                end
+            end
+        end
+    end)
+
+    createToggle(tabFrames["Visuals"].Frame, "Box ESP", function(v) Settings.Visuals.BoxEsp = v end)
+    createToggle(tabFrames["Visuals"].Frame, "Tracers (ESP Lines)", function(v) Settings.Visuals.Tracers = v end)
+    createToggle(tabFrames["Visuals"].Frame, "Team Check", function(v) Settings.Visuals.TeamCheck = v end)
+
+    local espObjects = {}
+    RunService.RenderStepped:Connect(function()
+        for _, p in pairs(Players:GetPlayers()) do
+            if p ~= player then
+                local char = p.Character
+                if char and char:FindFirstChild("HumanoidRootPart") then
+                    local isTeammate = Settings.Visuals.TeamCheck and p.Team == player.Team
+                    
+                    if Settings.Visuals.BoxEsp and not isTeammate then
+                        local h = espObjects[p] and espObjects[p].Highlight or create("Highlight", {Parent = char, Name = "ZorbitESP"})
+                        h.Adornee = char
+                        h.FillColor = p.TeamColor.Color
+                        h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+                        h.Enabled = true
+                        if not espObjects[p] then espObjects[p] = {Highlight = h} else espObjects[p].Highlight = h end
+                    elseif espObjects[p] and espObjects[p].Highlight then
+                        espObjects[p].Highlight.Enabled = false
+                    end
+
+                    if Settings.Visuals.Tracers and not isTeammate then
+                        local pos, onScreen = Camera:WorldToViewportPoint(char.HumanoidRootPart.Position)
+                        if onScreen and pos.Z > 0 then
+                            local tracer = espObjects[p] and espObjects[p].Tracer or create("Frame", {Parent = sg, BackgroundColor3 = p.TeamColor.Color, BorderSizePixel = 0, AnchorPoint = Vector2.new(0.5, 0)})
+                            local screenCenter = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y)
+                            local targetPos = Vector2.new(pos.X, pos.Y)
+                            local dist = (targetPos - screenCenter).Magnitude
+                            
+                            tracer.Size = UDim2.new(0, 2, 0, dist)
+                            tracer.Position = UDim2.new(0, screenCenter.X, 0, screenCenter.Y)
+                            tracer.Rotation = math.deg(math.atan2(targetPos.Y - screenCenter.Y, targetPos.X - screenCenter.X)) - 90
+                            tracer.Visible = true
+                            if not espObjects[p] then espObjects[p] = {Tracer = tracer} else espObjects[p].Tracer = tracer end
+                        elseif espObjects[p] and espObjects[p].Tracer then
+                            espObjects[p].Tracer.Visible = false
+                        end
+                    elseif espObjects[p] and espObjects[p].Tracer then
+                        espObjects[p].Tracer.Visible = false
+                    end
+                end
+            end
+        end
+    end)
+
+    createToggle(tabFrames["Misc"].Frame, "NoClip", function(v) Settings.Misc.NoClip = v end)
+    createToggle(tabFrames["Misc"].Frame, "Infinite Jump", function(v) Settings.Misc.InfiniteJump = v end)
+    createSlider(tabFrames["Misc"].Frame, "WalkSpeed", 16, 200, 16, function(v) Settings.Misc.WalkSpeed = v end)
+
+    local function addSettingBtn(text, callback)
+        local btn = create("TextButton", {Size = UDim2.new(1, -20, 0, 30), BackgroundColor3 = Color3.fromRGB(30, 30, 30), Text = text, TextColor3 = Settings.UI.IsPremium and GOLD_COLOR or ACCENT_COLOR, Font = THIN_FONT, TextSize = 16, Parent = tabFrames["Settings"].Frame})
+        btn.MouseButton1Click:Connect(callback)
+    end
+
+    local function setTheme(theme)
+        Settings.UI.Theme = theme
+        if theme == "Gold" then
+            task.spawn(function()
+                while Settings.UI.Theme == "Gold" do
+                    TweenService:Create(main, TweenInfo.new(2), {BackgroundColor3 = Color3.fromRGB(150, 120, 0)}):Play()
+                    task.wait(2)
+                    TweenService:Create(main, TweenInfo.new(2), {BackgroundColor3 = Color3.fromRGB(80, 60, 0)}):Play()
+                    task.wait(2)
+                end
+            end)
+        elseif theme == "Purple" then
+            task.spawn(function()
+                while Settings.UI.Theme == "Purple" do
+                    TweenService:Create(main, TweenInfo.new(2), {BackgroundColor3 = Color3.fromRGB(40, 0, 80)}):Play()
+                    task.wait(2)
+                    TweenService:Create(main, TweenInfo.new(2), {BackgroundColor3 = Color3.fromRGB(20, 0, 40)}):Play()
+                    task.wait(2)
+                end
+            end)
+        else
+            main.BackgroundColor3 = BG_COLOR
+        end
+    end
+
+    if Settings.UI.IsPremium then
+        addSettingBtn("Animated Gold Background", function() setTheme("Gold") end)
+        addSettingBtn("Gold Rain", function() Settings.UI.RainColor = GOLD_COLOR end)
+    end
+    addSettingBtn("Animated Dark Purple", function() setTheme("Purple") end)
+    addSettingBtn("Rain: White", function() Settings.UI.RainColor = Color3.fromRGB(255, 255, 255) end)
+    addSettingBtn("Rain: Purple", function() Settings.UI.RainColor = Color3.fromRGB(180, 0, 255) end)
+end
+
+RunService.Stepped:Connect(function()
+    if player.Character and player.Character:FindFirstChild("Humanoid") then
+        player.Character.Humanoid.WalkSpeed = Settings.Misc.WalkSpeed
+        if Settings.Misc.NoClip then
+            for _, part in pairs(player.Character:GetChildren()) do
+                if part:IsA("BasePart") then part.CanCollide = false end
+            end
+        end
+    end
+end)
+
+UserInputService.JumpRequest:Connect(function()
+    if Settings.Misc.InfiniteJump then
+        local humanoid = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+        if humanoid then humanoid:ChangeState("Jumping") end
+    end
+end)
+
+local function makeDraggable(frame)
+    local dragging, dragStart, startPos
+    frame.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = true; dragStart = input.Position; startPos = frame.Position
+        end
+    end)
+    UserInputService.InputChanged:Connect(function(input)
+        if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+            local delta = input.Position - dragStart
+            frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+        end
+    end)
+    UserInputService.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
+    end)
+end
+
+makeDraggable(main)
+makeDraggable(captcha)
+makeDraggable(loader)
+
+UserInputService.InputBegan:Connect(function(input, gpe)
+    if not gpe and input.KeyCode == Enum.KeyCode.RightShift then
+        if not captcha.Visible and not loader.Visible then main.Visible = not main.Visible end
+    end
+end)
